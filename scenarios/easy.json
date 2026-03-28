@@ -1,0 +1,111 @@
+{
+  "id": "easy",
+  "title": "Service OOM Crash",
+  "difficulty": "easy",
+  "alert": {
+    "severity": "CRITICAL",
+    "title": "order-service is DOWN",
+    "message": "Service order-service has stopped responding. Last health check failed at 14:23:01 UTC. On-call SRE has been paged.",
+    "triggered_at": "2024-03-28T14:23:05Z"
+  },
+  "services": {
+    "order-service": {
+      "status": "crashed",
+      "logs": [
+        "2024-03-28 14:20:12 [INFO] Processing order batch #4521 (1,247 orders)",
+        "2024-03-28 14:20:45 [INFO] Order batch #4521 processing: 623/1247 complete",
+        "2024-03-28 14:21:03 [WARN] Memory usage at 89% - approaching limit",
+        "2024-03-28 14:21:30 [WARN] GC pause duration: 4.2s (threshold: 1.0s)",
+        "2024-03-28 14:21:45 [WARN] Memory usage at 94% - GC unable to free sufficient memory",
+        "2024-03-28 14:22:01 [ERROR] Memory allocation failed: requested 256MB, available 12MB",
+        "2024-03-28 14:22:17 [ERROR] java.lang.OutOfMemoryError: Java heap space",
+        "2024-03-28 14:22:17 [ERROR] Fatal: Cannot allocate memory for order processing pipeline",
+        "2024-03-28 14:22:18 [ERROR] Service shutting down due to unrecoverable OOM condition",
+        "2024-03-28 14:22:18 [INFO] Graceful shutdown initiated... failed. Force killing."
+      ],
+      "metrics": {
+        "cpu_percent": 0.0,
+        "memory_percent": 98.5,
+        "latency_p99_ms": 0,
+        "error_rate_percent": 100.0,
+        "active_connections": 0
+      },
+      "deploy": {
+        "current_version": "v2.3.1",
+        "previous_version": "v2.3.0",
+        "deployed_at": "2024-03-28T10:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["db-primary"]
+      }
+    },
+    "db-primary": {
+      "status": "healthy",
+      "logs": [
+        "2024-03-28 14:20:00 [INFO] Checkpoint complete: 234 buffers written",
+        "2024-03-28 14:21:00 [INFO] Routine vacuum on table: orders (1.2M rows)",
+        "2024-03-28 14:22:00 [INFO] Connection from order-service lost (client disconnected)",
+        "2024-03-28 14:22:01 [INFO] Active connections: 45/100",
+        "2024-03-28 14:22:30 [INFO] Replication lag: 0.2s (within threshold)"
+      ],
+      "metrics": {
+        "cpu_percent": 32.0,
+        "memory_percent": 61.0,
+        "latency_p99_ms": 8,
+        "error_rate_percent": 0.0,
+        "active_connections": 45
+      },
+      "deploy": {
+        "current_version": "v5.1.0",
+        "previous_version": "v5.0.9",
+        "deployed_at": "2024-03-14T08:00:00Z",
+        "deployed_by": "dba-team"
+      },
+      "dependencies": {
+        "upstream": ["order-service", "api-gateway"],
+        "downstream": []
+      }
+    },
+    "api-gateway": {
+      "status": "healthy",
+      "logs": [
+        "2024-03-28 14:22:20 [WARN] Upstream order-service not responding, returning 502 for /api/orders",
+        "2024-03-28 14:22:21 [WARN] Circuit breaker OPEN for order-service (5 consecutive failures)",
+        "2024-03-28 14:22:25 [INFO] Health check: db-primary OK, order-service FAIL",
+        "2024-03-28 14:22:30 [INFO] Routing /orders/* requests to fallback error page",
+        "2024-03-28 14:22:45 [WARN] Elevated 5xx rate: 12.5% of requests returning 502"
+      ],
+      "metrics": {
+        "cpu_percent": 28.0,
+        "memory_percent": 45.0,
+        "latency_p99_ms": 15,
+        "error_rate_percent": 12.5,
+        "active_connections": 890
+      },
+      "deploy": {
+        "current_version": "v1.8.0",
+        "previous_version": "v1.7.9",
+        "deployed_at": "2024-03-21T09:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": [],
+        "downstream": ["order-service", "db-primary"]
+      }
+    }
+  },
+  "root_cause": {
+    "service": "order-service",
+    "category": "oom",
+    "description": "order-service ran out of memory processing a large order batch, causing an OOM crash",
+    "keywords": ["oom", "out of memory", "memory", "order-service", "OutOfMemoryError", "heap"]
+  },
+  "correct_remediation": [
+    {"action": "restart_service", "args": {"service_name": "order-service"}}
+  ],
+  "max_steps": 10,
+  "investigation_targets": ["order-service"],
+  "investigation_metrics": [["order-service", "memory_percent"]]
+}

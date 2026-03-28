@@ -1,0 +1,168 @@
+{
+  "id": "medium",
+  "title": "Database Slow Query Causing Latency Cascade",
+  "difficulty": "medium",
+  "alert": {
+    "severity": "HIGH",
+    "title": "Latency spike across multiple services",
+    "message": "Multiple services reporting elevated p99 latency. user-service p99=4200ms, payment-service p99=3500ms. SLO breach detected.",
+    "triggered_at": "2024-03-28T15:10:00Z"
+  },
+  "services": {
+    "api-gateway": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 15:09:45 [INFO] Incoming request rate: 1,247 req/s (normal range)",
+        "2024-03-28 15:10:00 [WARN] Response time for /api/users exceeding SLO (p99 > 2000ms, current: 4200ms)",
+        "2024-03-28 15:10:05 [WARN] Response time for /api/payments exceeding SLO (p99 > 2000ms, current: 3500ms)",
+        "2024-03-28 15:10:10 [INFO] Upstream latency breakdown: user-service=1800ms, payment-service=2500ms",
+        "2024-03-28 15:10:15 [WARN] 15% of requests timing out at 5s gateway limit",
+        "2024-03-28 15:10:20 [WARN] SLO breach: p99 latency > 2000ms for 5 consecutive minutes"
+      ],
+      "metrics": {
+        "cpu_percent": 55.0,
+        "memory_percent": 52.0,
+        "latency_p99_ms": 2800,
+        "error_rate_percent": 15.0,
+        "active_connections": 1200
+      },
+      "deploy": {
+        "current_version": "v1.8.0",
+        "previous_version": "v1.7.9",
+        "deployed_at": "2024-03-21T09:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": [],
+        "downstream": ["user-service", "payment-service", "db-primary", "cache-redis"]
+      }
+    },
+    "user-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 15:09:30 [WARN] Database query took 4.2s: SELECT * FROM users WHERE last_login > '2024-03-01'",
+        "2024-03-28 15:09:45 [WARN] Connection pool exhaustion warning: 48/50 active connections to db-primary",
+        "2024-03-28 15:10:00 [ERROR] Request timeout after 5000ms for GET /api/users/profile",
+        "2024-03-28 15:10:02 [WARN] Database query took 3.8s: SELECT u.*, s.* FROM users u JOIN sessions s ON u.id = s.user_id",
+        "2024-03-28 15:10:10 [ERROR] 22% of requests failing due to database timeouts",
+        "2024-03-28 15:10:15 [WARN] Falling back to stale cache for user profile data"
+      ],
+      "metrics": {
+        "cpu_percent": 42.0,
+        "memory_percent": 58.0,
+        "latency_p99_ms": 4200,
+        "error_rate_percent": 22.0,
+        "active_connections": 48
+      },
+      "deploy": {
+        "current_version": "v3.1.0",
+        "previous_version": "v3.0.9",
+        "deployed_at": "2024-03-25T14:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["db-primary", "cache-redis"]
+      }
+    },
+    "payment-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 15:09:35 [WARN] Transaction processing delayed: DB response time 3.5s (expected <100ms)",
+        "2024-03-28 15:09:50 [ERROR] Payment timeout for order #78234 - DB connection wait exceeded 4s",
+        "2024-03-28 15:10:00 [WARN] 18 payment retries queued in last 30s",
+        "2024-03-28 15:10:05 [WARN] Retry queue growing: 127 pending transactions",
+        "2024-03-28 15:10:10 [ERROR] Circuit breaker OPEN for db-primary connection pool",
+        "2024-03-28 15:10:15 [ERROR] Payment processing suspended: cannot acquire DB connection within timeout"
+      ],
+      "metrics": {
+        "cpu_percent": 38.0,
+        "memory_percent": 55.0,
+        "latency_p99_ms": 3500,
+        "error_rate_percent": 18.0,
+        "active_connections": 50
+      },
+      "deploy": {
+        "current_version": "v2.5.3",
+        "previous_version": "v2.5.2",
+        "deployed_at": "2024-03-26T11:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["db-primary"]
+      }
+    },
+    "db-primary": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 15:08:00 [INFO] Autovacuum started on table: user_sessions (estimated 4.8M dead tuples)",
+        "2024-03-28 15:09:00 [WARN] Slow query detected (45.2s): SELECT u.*, s.*, o.* FROM users u JOIN sessions s ON u.id = s.user_id JOIN orders o ON u.id = o.user_id WHERE s.last_active > '2024-03-01' ORDER BY o.created_at DESC",
+        "2024-03-28 15:09:01 [WARN] Query plan: Sequential scan on orders (estimated rows: 2.4M, no usable index on orders.user_id)",
+        "2024-03-28 15:09:10 [WARN] Active connections: 95/100 - approaching maximum",
+        "2024-03-28 15:09:20 [WARN] Slow query detected (38.7s): same query pattern repeating from user-service pool",
+        "2024-03-28 15:09:30 [WARN] Lock contention on table: orders (15 queries waiting for row-level locks)",
+        "2024-03-28 15:09:45 [ERROR] Connection pool saturated: 100/100 connections in use, 12 queries waiting",
+        "2024-03-28 15:10:00 [WARN] Checkpoint taking longer than expected: 45s (threshold: 30s)",
+        "2024-03-28 15:10:10 [ERROR] New connection refused: too many clients already (max_connections=100)"
+      ],
+      "metrics": {
+        "cpu_percent": 92.0,
+        "memory_percent": 78.0,
+        "latency_p99_ms": 45200,
+        "error_rate_percent": 0.0,
+        "active_connections": 100
+      },
+      "deploy": {
+        "current_version": "v5.1.0",
+        "previous_version": "v5.0.9",
+        "deployed_at": "2024-03-14T08:00:00Z",
+        "deployed_by": "dba-team"
+      },
+      "dependencies": {
+        "upstream": ["user-service", "payment-service", "api-gateway"],
+        "downstream": []
+      }
+    },
+    "cache-redis": {
+      "status": "healthy",
+      "logs": [
+        "2024-03-28 15:05:00 [WARN] Eviction policy triggered: 1,247 keys evicted (allkeys-lru)",
+        "2024-03-28 15:07:00 [WARN] Memory usage at 85% of maxmemory limit (3.4GB/4.0GB)",
+        "2024-03-28 15:09:00 [INFO] Cache hit rate: 67% (down from 82% baseline due to evictions)",
+        "2024-03-28 15:10:00 [WARN] Eviction rate elevated: 45 keys/sec (normal: 5 keys/sec)",
+        "2024-03-28 15:10:10 [INFO] Most evicted key patterns: user:session:*, user:profile:*"
+      ],
+      "metrics": {
+        "cpu_percent": 15.0,
+        "memory_percent": 85.0,
+        "latency_p99_ms": 2,
+        "error_rate_percent": 0.0,
+        "active_connections": 200
+      },
+      "deploy": {
+        "current_version": "v7.2.0",
+        "previous_version": "v7.1.0",
+        "deployed_at": "2024-03-10T06:00:00Z",
+        "deployed_by": "infra-team"
+      },
+      "dependencies": {
+        "upstream": ["user-service", "api-gateway"],
+        "downstream": []
+      }
+    }
+  },
+  "root_cause": {
+    "service": "db-primary",
+    "category": "slow_query",
+    "description": "An unindexed query joining users, sessions, and orders tables is causing sequential scans on 2.4M rows, saturating the database connection pool and causing cascading latency across all dependent services",
+    "keywords": ["slow query", "sequential scan", "no index", "db-primary", "database", "connection pool", "latency"]
+  },
+  "correct_remediation": [
+    {"action": "run_db_query", "args": {"query": "KILL QUERY 4281"}},
+    {"action": "run_db_query", "args": {"query": "CREATE INDEX idx_orders_user_created ON orders(user_id, created_at)"}}
+  ],
+  "max_steps": 15,
+  "investigation_targets": ["db-primary"],
+  "investigation_metrics": [["db-primary", "latency_p99_ms"], ["db-primary", "active_connections"]]
+}

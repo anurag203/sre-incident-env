@@ -1,0 +1,23 @@
+spec_version: 1
+name: sre_incident_env
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+
+tasks:
+  - id: easy
+    title: "Service OOM Crash"
+    description: "A memory leak in order-service causes OOM crashes. Investigate, diagnose, and restart the affected service."
+    max_steps: 10
+    difficulty: easy
+  - id: medium
+    title: "Database Slow Query Causing Latency Cascade"
+    description: "A long-running query on db-primary degrades downstream services. Kill the query and add an index."
+    max_steps: 15
+    difficulty: medium
+  - id: hard
+    title: "Bad Deploy Cascading Failure"
+    description: "A faulty auth-service deployment triggers cascading failures across the stack. Rollback the deploy, restart affected services, and stabilize the system."
+    max_steps: 20
+    difficulty: hard
