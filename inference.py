@@ -22,8 +22,14 @@ import sys
 import textwrap
 from typing import Optional
 
-import certifi
-import httpx
+try:
+    import certifi
+except ImportError:
+    certifi = None
+try:
+    import httpx
+except ImportError:
+    httpx = None
 from openai import OpenAI
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
@@ -37,6 +43,8 @@ INSECURE_SKIP_VERIFY = os.getenv("OPENENV_INSECURE_SKIP_VERIFY", "0") == "1"
 BASELINE_MODE = os.getenv("BASELINE_MODE", "hybrid").lower()
 
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+
+SUCCESS_SCORE_THRESHOLD = 0.5
 
 SYSTEM_PROMPT = textwrap.dedent("""\
     You are an expert Site Reliability Engineer (SRE) handling a production incident.
@@ -152,9 +160,11 @@ def create_client() -> Optional[OpenAI]:
         print("ERROR: MODEL_NAME environment variable is required.")
         sys.exit(1)
 
-    verify = False if INSECURE_SKIP_VERIFY else certifi.where()
-    http_client = httpx.Client(verify=verify, timeout=90.0)
-    return OpenAI(base_url=API_BASE_URL, api_key=API_KEY, http_client=http_client)
+    if httpx is not None and certifi is not None:
+        verify = False if INSECURE_SKIP_VERIFY else certifi.where()
+        http_client = httpx.Client(verify=verify, timeout=90.0)
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY, http_client=http_client)
+    return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
 
 def parse_tool_call(response_text: str) -> tuple[Optional[str], dict]:
@@ -489,95 +499,163 @@ async def ws_step(ws, tool_name: str, args: dict) -> dict:
     }
 
 
+def log_start(task: str, env: str, model: str) -> None:
+    """Emit structured [START] log line for the evaluator."""
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(
+    step: int, action: str, reward: float, done: bool, error: Optional[str] = None,
+) -> None:
+    """Emit structured [STEP] log line for the evaluator."""
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list) -> None:
+    """Emit structured [END] log line for the evaluator."""
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+def wait_for_server(base_url: str, timeout: int = 120) -> bool:
+    """Poll the server health endpoint until it responds or timeout."""
+    import time
+    import urllib.request
+    import urllib.error
+
+    urls = [f"{base_url}/health", f"{base_url}/"]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for url in urls:
+            try:
+                req = urllib.request.urlopen(url, timeout=5)
+                if req.status == 200:
+                    return True
+            except Exception:
+                pass
+        time.sleep(2)
+    return False
+
+
 async def run_task_async(llm_client: Optional[OpenAI], task_id: str, task_title: str) -> float:
     """Run a single task over WebSocket and return the final score."""
-    import websockets
+    rewards_list: list[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
 
-    print(f"\nTask: {task_id} ({task_title})")
-    print("-" * 50)
+    log_start(task=task_id, env="sre_incident_env", model=MODEL_NAME or "policy")
 
-    ws_url = _get_ws_url()
-    async with websockets.connect(ws_url) as ws:
-        reset_result = await ws_reset(ws, task_id)
-        obs = reset_result.get("observation", {})
+    try:
+        import websockets
+        print(f"\nTask: {task_id} ({task_title})")
+        print("-" * 50)
 
-        initial_result = obs.get("result", "")
-        try:
-            initial_data = json.loads(initial_result) if initial_result else {}
-        except (json.JSONDecodeError, TypeError):
-            initial_data = {}
+        ws_url = _get_ws_url()
+        async with websockets.connect(ws_url, open_timeout=30, close_timeout=10) as ws:
+            reset_result = await ws_reset(ws, task_id)
+            obs = reset_result.get("observation", {})
 
-        alert_info = initial_data.get("alert", {})
-        services = initial_data.get("services", [])
-        max_steps = initial_data.get("max_steps", 15)
+            initial_result = obs.get("result", "")
+            try:
+                initial_data = json.loads(initial_result) if initial_result else {}
+            except (json.JSONDecodeError, TypeError):
+                initial_data = {}
 
-        initial_context = (
-            f"INCIDENT ALERT:\n"
-            f"  Severity: {alert_info.get('severity', 'UNKNOWN')}\n"
-            f"  Title: {alert_info.get('title', 'N/A')}\n"
-            f"  Message: {alert_info.get('message', 'N/A')}\n"
-            f"\nInfrastructure services: {', '.join(services)}\n"
-            f"You have {max_steps} steps to investigate and resolve this incident."
-        )
+            alert_info = initial_data.get("alert", {})
+            services = initial_data.get("services", [])
+            max_steps = initial_data.get("max_steps", 15)
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": initial_context},
-        ]
-
-        final_score = 0.0
-        task_step_budget = MAX_STEPS_OVERRIDE or max_steps
-        executed_actions: list[tuple[str, dict]] = []
-        llm_attempts = 0
-
-        for step in range(1, task_step_budget + 1):
-            tool_name, args, used_policy, llm_attempts = _choose_action(
-                task_id, messages, llm_client, executed_actions, llm_attempts
+            initial_context = (
+                f"INCIDENT ALERT:\n"
+                f"  Severity: {alert_info.get('severity', 'UNKNOWN')}\n"
+                f"  Title: {alert_info.get('title', 'N/A')}\n"
+                f"  Message: {alert_info.get('message', 'N/A')}\n"
+                f"\nInfrastructure services: {', '.join(services)}\n"
+                f"You have {max_steps} steps to investigate and resolve this incident."
             )
 
-            args_str = json.dumps(args) if args else "{}"
-            source = "policy" if used_policy else "llm"
-            print(f"  Step {step}: [{source}] {tool_name}({args_str})")
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": initial_context},
+            ]
 
-            result = await ws_step(ws, tool_name, args)
-            obs_data = result.get("observation", {})
-            reward = result.get("reward", 0.0)
-            done = result.get("done", False)
-            tool_result = _parse_result_field(obs_data)
-            executed_actions.append((tool_name, args))
+            task_step_budget = MAX_STEPS_OVERRIDE or max_steps
+            executed_actions: list[tuple[str, dict]] = []
+            llm_attempts = 0
 
-            if len(str(tool_result)) > 1500:
-                tool_result = str(tool_result)[:1500] + "... [truncated]"
+            for step in range(1, task_step_budget + 1):
+                tool_name, args, used_policy, llm_attempts = _choose_action(
+                    task_id, messages, llm_client, executed_actions, llm_attempts
+                )
 
-            if used_policy:
+                args_str = json.dumps(args) if args else "{}"
+                action_str = f"{tool_name}({args_str})"
+                source = "policy" if used_policy else "llm"
+                print(f"  Step {step}: [{source}] {action_str}")
+
+                result = await ws_step(ws, tool_name, args)
+                obs_data = result.get("observation", {})
+                reward = result.get("reward", 0.0)
+                done = result.get("done", False)
+                tool_result = _parse_result_field(obs_data)
+                executed_actions.append((tool_name, args))
+
+                rewards_list.append(reward)
+                steps_taken = step
+
+                log_step(step=step, action=action_str, reward=reward, done=done, error=None)
+
+                if len(str(tool_result)) > 1500:
+                    tool_result = str(tool_result)[:1500] + "... [truncated]"
+
+                if used_policy:
+                    messages.append({
+                        "role": "assistant",
+                        "content": f"TOOL: {tool_name}\nARGS: {json.dumps(args)}",
+                    })
                 messages.append({
-                    "role": "assistant",
-                    "content": f"TOOL: {tool_name}\nARGS: {json.dumps(args)}",
+                    "role": "user",
+                    "content": f"Tool result:\n{tool_result}\n\nReward: {reward}\nSteps remaining: {max_steps - step}",
                 })
-            messages.append({
-                "role": "user",
-                "content": f"Tool result:\n{tool_result}\n\nReward: {reward}\nSteps remaining: {max_steps - step}",
-            })
 
-            if done:
-                try:
-                    terminal_data = json.loads(obs_data.get("result", "{}"))
-                except (json.JSONDecodeError, TypeError):
-                    terminal_data = {}
-                final_score = terminal_data.get("score", reward)
-                breakdown = terminal_data.get("breakdown", {})
-                print(f"  --> Episode ended. Score: {final_score}")
-                if breakdown:
-                    print(f"      Investigation: {breakdown.get('investigation', 'N/A')}")
-                    print(f"      Diagnosis:     {breakdown.get('diagnosis', 'N/A')}")
-                    print(f"      Remediation:   {breakdown.get('remediation', 'N/A')}")
-                    print(f"      Efficiency:    {breakdown.get('efficiency', 'N/A')}")
-                    print(f"      Penalties:     -{breakdown.get('penalties', 'N/A')}")
-                break
-        else:
-            print(f"  --> Max inference steps reached. Score: {final_score}")
+                if done:
+                    try:
+                        terminal_data = json.loads(obs_data.get("result", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        terminal_data = {}
+                    score = terminal_data.get("score", reward)
+                    success = score >= SUCCESS_SCORE_THRESHOLD
+                    breakdown = terminal_data.get("breakdown", {})
+                    print(f"  --> Episode ended. Score: {score}")
+                    if breakdown:
+                        print(f"      Investigation: {breakdown.get('investigation', 'N/A')}")
+                        print(f"      Diagnosis:     {breakdown.get('diagnosis', 'N/A')}")
+                        print(f"      Remediation:   {breakdown.get('remediation', 'N/A')}")
+                        print(f"      Efficiency:    {breakdown.get('efficiency', 'N/A')}")
+                        print(f"      Penalties:     -{breakdown.get('penalties', 'N/A')}")
+                    break
+            else:
+                score = sum(rewards_list) if rewards_list else 0.0
+                score = min(max(score, 0.0), 1.0)
+                success = score >= SUCCESS_SCORE_THRESHOLD
+                print(f"  --> Max inference steps reached. Score: {score}")
 
-    return final_score
+    except Exception as exc:
+        print(f"[DEBUG] Task {task_id} error: {exc}", flush=True)
+
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards_list)
+
+    return score
 
 
 def main():
@@ -590,17 +668,41 @@ def main():
     print(f"Model: {MODEL_NAME}")
     print(f"Environment: {ENV_BASE_URL}")
 
-    llm_client = create_client()
-
     tasks = [
         ("easy", "Service OOM Crash"),
         ("medium", "Database Slow Query Cascade"),
         ("hard", "Bad Deploy Cascading Failure"),
     ]
 
+    print("\nWaiting for environment server...", flush=True)
+    server_ok = wait_for_server(ENV_BASE_URL)
+    if not server_ok:
+        print("ERROR: Environment server not reachable.", flush=True)
+        for task_id, title in tasks:
+            log_start(task=task_id, env="sre_incident_env", model=MODEL_NAME or "policy")
+            log_end(success=False, steps=0, score=0.0, rewards=[])
+        print("Emitted zero-score logs for all tasks. Exiting.", flush=True)
+        sys.exit(0)
+    print("Server is ready.\n", flush=True)
+
+    llm_client = create_client()
+
+    task_timeout = 300
+
     scores = {}
     for task_id, title in tasks:
-        score = asyncio.run(run_task_async(llm_client, task_id, title))
+        try:
+            score = asyncio.run(
+                asyncio.wait_for(run_task_async(llm_client, task_id, title), timeout=task_timeout)
+            )
+        except asyncio.TimeoutError:
+            print(f"[DEBUG] Task {task_id} timed out after {task_timeout}s", flush=True)
+            log_start(task=task_id, env="sre_incident_env", model=MODEL_NAME or "policy")
+            log_end(success=False, steps=0, score=0.0, rewards=[])
+            score = 0.0
+        except Exception as exc:
+            print(f"[DEBUG] Task {task_id} crashed: {exc}", flush=True)
+            score = 0.0
         scores[task_id] = score
 
     print("\n" + "=" * 60)
