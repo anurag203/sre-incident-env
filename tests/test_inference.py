@@ -60,6 +60,8 @@ def test_policy_plans_hit_expected_scores():
         "easy": 0.89,
         "medium": 0.92,
         "hard": 0.92,
+        "cache_failure": 0.89,
+        "memory_leak": 0.97,
     }
 
     for task_id, expected_score in expected_scores.items():

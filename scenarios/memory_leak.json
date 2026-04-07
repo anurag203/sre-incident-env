@@ -1,0 +1,198 @@
+{
+  "id": "memory_leak",
+  "title": "Memory Leak from Bad Deploy",
+  "difficulty": "hard",
+  "alert": {
+    "severity": "CRITICAL",
+    "title": "user-service unresponsive — cascading failures detected",
+    "message": "user-service has stopped responding after gradual degradation. order-service and payment-service reporting failures. Customer-facing error rate at 60%.",
+    "triggered_at": "2024-03-28T18:45:00Z"
+  },
+  "services": {
+    "user-service": {
+      "status": "crashed",
+      "logs": [
+        "2024-03-28 18:00:00 [INFO] Deploy v3.1.0 started by ci-pipeline (commit: e4f5g6h)",
+        "2024-03-28 18:00:15 [INFO] Deploy v3.1.0 complete. Health check: PASS",
+        "2024-03-28 18:10:00 [INFO] Memory usage: 52% (within normal range)",
+        "2024-03-28 18:20:00 [WARN] Memory usage: 68% (elevated, monitoring)",
+        "2024-03-28 18:30:00 [WARN] Memory usage: 79% — growing steadily since v3.1.0 deploy",
+        "2024-03-28 18:35:00 [WARN] GC pause duration: 3.8s (threshold: 1.0s) — possible memory leak",
+        "2024-03-28 18:38:00 [ERROR] Memory usage: 91% — GC unable to reclaim sufficient heap",
+        "2024-03-28 18:40:00 [ERROR] java.lang.OutOfMemoryError: GC overhead limit exceeded",
+        "2024-03-28 18:42:00 [ERROR] Heap dump analysis: HashMap in UserSessionCache.refreshAll() growing unbounded",
+        "2024-03-28 18:44:00 [ERROR] Memory allocation failed: requested 128MB, available 8MB",
+        "2024-03-28 18:44:30 [ERROR] Service shutting down due to unrecoverable OOM condition",
+        "2024-03-28 18:44:30 [INFO] NOTE: Memory growth started immediately after v3.1.0 deploy — regression suspected"
+      ],
+      "metrics": {
+        "cpu_percent": 0.0,
+        "memory_percent": 99.2,
+        "latency_p99_ms": 0,
+        "error_rate_percent": 100.0,
+        "active_connections": 0
+      },
+      "deploy": {
+        "current_version": "v3.1.0",
+        "previous_version": "v3.0.9",
+        "deployed_at": "2024-03-28T18:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["db-primary"]
+      }
+    },
+    "order-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 18:44:35 [ERROR] Failed to fetch user profile for order #91234: user-service connection refused",
+        "2024-03-28 18:44:40 [ERROR] Order validation failed: cannot verify user identity (user-service down)",
+        "2024-03-28 18:44:50 [WARN] 85% of new orders rejected: user validation unavailable",
+        "2024-03-28 18:45:00 [ERROR] Order processing pipeline blocked: 1,847 orders pending user validation",
+        "2024-03-28 18:45:10 [WARN] Circuit breaker OPEN for user-service (10 consecutive failures)",
+        "2024-03-28 18:45:15 [ERROR] Revenue impact: estimated $12,400/min in blocked orders"
+      ],
+      "metrics": {
+        "cpu_percent": 38.0,
+        "memory_percent": 49.0,
+        "latency_p99_ms": 220,
+        "error_rate_percent": 85.0,
+        "active_connections": 240
+      },
+      "deploy": {
+        "current_version": "v2.3.1",
+        "previous_version": "v2.3.0",
+        "deployed_at": "2024-03-28T10:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["user-service", "db-primary", "payment-service"]
+      }
+    },
+    "payment-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 18:44:40 [ERROR] Cannot process payment: user-service returned connection refused for user verification",
+        "2024-03-28 18:44:50 [WARN] Suspending payment processing until user-service recovers",
+        "2024-03-28 18:45:00 [ERROR] 12 payment webhooks failed: user identity cannot be verified",
+        "2024-03-28 18:45:10 [WARN] Payment retry queue growing: 156 pending transactions",
+        "2024-03-28 18:45:15 [ERROR] Stripe webhook delivery failing: our endpoint cannot validate user context"
+      ],
+      "metrics": {
+        "cpu_percent": 28.0,
+        "memory_percent": 44.0,
+        "latency_p99_ms": 160,
+        "error_rate_percent": 78.0,
+        "active_connections": 130
+      },
+      "deploy": {
+        "current_version": "v2.5.3",
+        "previous_version": "v2.5.2",
+        "deployed_at": "2024-03-26T11:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["order-service", "api-gateway"],
+        "downstream": ["user-service", "db-primary"]
+      }
+    },
+    "db-primary": {
+      "status": "healthy",
+      "logs": [
+        "2024-03-28 18:44:30 [WARN] Connection from user-service lost (client disconnected)",
+        "2024-03-28 18:44:35 [WARN] Connection pool churn: 12 connections dropped, 8 new retries from order-service",
+        "2024-03-28 18:44:45 [INFO] Active connections: 68/100 (within limits)",
+        "2024-03-28 18:45:00 [INFO] Query latency normal: p99=14ms",
+        "2024-03-28 18:45:10 [INFO] No anomalies in query patterns — database operating normally",
+        "2024-03-28 18:45:15 [INFO] Replication lag: 0.3s (within threshold)"
+      ],
+      "metrics": {
+        "cpu_percent": 38.0,
+        "memory_percent": 59.0,
+        "latency_p99_ms": 14,
+        "error_rate_percent": 0.0,
+        "active_connections": 68
+      },
+      "deploy": {
+        "current_version": "v5.1.0",
+        "previous_version": "v5.0.9",
+        "deployed_at": "2024-03-14T08:00:00Z",
+        "deployed_by": "dba-team"
+      },
+      "dependencies": {
+        "upstream": ["user-service", "order-service", "payment-service"],
+        "downstream": []
+      }
+    },
+    "notification-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 18:44:50 [ERROR] Cannot send order confirmation: user-service unreachable for user preferences",
+        "2024-03-28 18:45:00 [WARN] Email queue backed up: 423 unsent notifications",
+        "2024-03-28 18:45:10 [ERROR] Push notification delivery failed: cannot fetch user device tokens (user-service down)",
+        "2024-03-28 18:45:15 [WARN] Disabling non-critical notifications until user-service recovers"
+      ],
+      "metrics": {
+        "cpu_percent": 18.0,
+        "memory_percent": 35.0,
+        "latency_p99_ms": 90,
+        "error_rate_percent": 68.0,
+        "active_connections": 95
+      },
+      "deploy": {
+        "current_version": "v1.4.2",
+        "previous_version": "v1.4.1",
+        "deployed_at": "2024-03-20T09:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["order-service"],
+        "downstream": ["user-service"]
+      }
+    },
+    "api-gateway": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 18:44:35 [ERROR] Upstream user-service returning connection refused",
+        "2024-03-28 18:44:40 [WARN] Circuit breaker triggered for user-service",
+        "2024-03-28 18:44:50 [ERROR] 60% of API requests failing: user-dependent endpoints unavailable",
+        "2024-03-28 18:45:00 [WARN] Cascading impact: order-service, payment-service also degraded",
+        "2024-03-28 18:45:10 [ERROR] Customer-facing error rate: 60% — major incident",
+        "2024-03-28 18:45:15 [INFO] Health dashboard: user-service DOWN, 3 other services DEGRADED, db-primary OK"
+      ],
+      "metrics": {
+        "cpu_percent": 55.0,
+        "memory_percent": 46.0,
+        "latency_p99_ms": 420,
+        "error_rate_percent": 60.0,
+        "active_connections": 1350
+      },
+      "deploy": {
+        "current_version": "v1.8.0",
+        "previous_version": "v1.7.9",
+        "deployed_at": "2024-03-21T09:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": [],
+        "downstream": ["user-service", "order-service", "payment-service", "notification-service"]
+      }
+    }
+  },
+  "root_cause": {
+    "service": "user-service",
+    "category": "memory_leak",
+    "description": "Deploy v3.1.0 to user-service introduced an unbounded HashMap in UserSessionCache.refreshAll() that grew continuously until the process was killed by OOM, cascading failures to all dependent services",
+    "keywords": ["memory leak", "oom", "user-service", "v3.1.0", "heap", "OutOfMemoryError", "deploy", "rollback"]
+  },
+  "correct_remediation": [
+    {"action": "rollback_deploy", "args": {"service_name": "user-service"}},
+    {"action": "restart_service", "args": {"service_name": "order-service"}},
+    {"action": "restart_service", "args": {"service_name": "payment-service"}}
+  ],
+  "max_steps": 18,
+  "investigation_targets": ["user-service"],
+  "investigation_metrics": [["user-service", "memory_percent"]]
+}

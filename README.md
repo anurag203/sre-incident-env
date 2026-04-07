@@ -73,6 +73,20 @@ The environment state is tracked via a typed `SREState` that includes:
 - **Red herrings**: Downstream errors, db-primary connection pool warnings
 - **Max steps**: 20
 
+### Task 4: Medium - Cache Layer Collapse
+- **Services**: 5 (cache-redis, db-primary, user-service, order-service, api-gateway)
+- **Root cause**: cache-redis OOM crash forces all services to hit db-primary directly, overwhelming it
+- **Fix**: Restart cache-redis to restore the cache layer
+- **Red herring**: db-primary shows 95% CPU and near-full connection pool (symptom, not cause)
+- **Max steps**: 12
+
+### Task 5: Hard - Memory Leak from Bad Deploy
+- **Services**: 6 (user-service, order-service, payment-service, db-primary, notification-service, api-gateway)
+- **Root cause**: Deploy v3.1.0 to user-service introduced an unbounded HashMap that leaked memory until OOM killed the process
+- **Fix**: Rollback user-service, restart order-service and payment-service
+- **Red herrings**: db-primary shows connection churn but is healthy; api-gateway and notification-service are degraded but auto-recover once upstream is fixed
+- **Max steps**: 18
+
 ## Reward Function
 
 | Component | Weight | Description |
@@ -145,7 +159,9 @@ Measured on `2026-03-28` against a local server using `deepseek-ai/DeepSeek-R1:f
 | Easy | 0.89 | 0.40 | 0.25 | 0.20 | 0.04 |
 | Medium | 0.92 | 0.40 | 0.25 | 0.20 | 0.07 |
 | Hard | 0.92 | 0.40 | 0.25 | 0.20 | 0.07 |
-| **Average** | **0.91** | | | | |
+| Cache Failure | 0.89 | 0.40 | 0.25 | 0.20 | 0.04 |
+| Memory Leak | 0.97 | 0.40 | 0.30 | 0.20 | 0.07 |
+| **Average** | **0.92** | | | | |
 
 *If you want a pure model-only run for comparison, set `BASELINE_MODE=llm`. If you want a fully deterministic reproducibility check, set `BASELINE_MODE=policy`.*
 

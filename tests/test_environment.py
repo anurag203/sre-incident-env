@@ -138,6 +138,64 @@ def test_metric_aliases_work_for_investigation_and_output():
     assert env.state.metrics_checked == [("order-service", "memory_percent")]
 
 
+def test_cache_failure_restart_heals_cascade():
+    env = IncidentEnvironment()
+    env.reset(task_id="cache_failure")
+
+    _step(env, "check_alert_details")
+    _step(env, "check_logs", service_name="db-primary")
+    _step(env, "check_logs", service_name="cache-redis")
+    _step(env, "check_metrics", service_name="cache-redis", metric="memory")
+    _step(env, "restart_service", service_name="cache-redis")
+    terminal = _step(
+        env,
+        "resolve_incident",
+        root_cause="cache-redis",
+        summary="cache-redis OOM fixed by restart; cache layer restored",
+    )
+
+    result = _result_dict(terminal)
+
+    assert terminal.done is True
+    assert result["diagnosis_correct"] is True
+    assert result["breakdown"]["penalties"] == 0.0
+    services = env._episode_state["services"]
+    assert services["cache-redis"]["status"] == "healthy"
+    assert services["db-primary"]["status"] == "healthy"
+
+
+def test_memory_leak_rollback_and_restart_heals_cascade():
+    env = IncidentEnvironment()
+    env.reset(task_id="memory_leak")
+
+    _step(env, "check_alert_details")
+    _step(env, "check_logs", service_name="api-gateway")
+    _step(env, "check_logs", service_name="user-service")
+    _step(env, "check_metrics", service_name="user-service", metric="memory")
+    _step(env, "check_dependencies", service_name="user-service")
+    _step(env, "rollback_deploy", service_name="user-service")
+    _step(env, "restart_service", service_name="order-service")
+    _step(env, "restart_service", service_name="payment-service")
+    terminal = _step(
+        env,
+        "resolve_incident",
+        root_cause="user-service",
+        summary="user-service v3.1.0 memory leak rolled back",
+    )
+
+    result = _result_dict(terminal)
+
+    assert terminal.done is True
+    assert result["diagnosis_correct"] is True
+    assert result["breakdown"]["penalties"] == 0.0
+    services = env._episode_state["services"]
+    assert services["user-service"]["status"] == "healthy"
+    assert services["order-service"]["status"] == "healthy"
+    assert services["payment-service"]["status"] == "healthy"
+    assert services["api-gateway"]["status"] == "healthy"
+    assert services["notification-service"]["status"] == "healthy"
+
+
 def test_metadata_endpoint_exposes_submission_ready_details():
     client = TestClient(app)
 

@@ -1,0 +1,168 @@
+{
+  "id": "cache_failure",
+  "title": "Cache Layer Collapse",
+  "difficulty": "medium",
+  "alert": {
+    "severity": "HIGH",
+    "title": "Database overload — latency spike across services",
+    "message": "db-primary CPU at 95%, connection pool near saturation. Multiple services reporting elevated p99 latency and timeouts. Possible database or upstream issue.",
+    "triggered_at": "2024-03-28T17:30:00Z"
+  },
+  "services": {
+    "cache-redis": {
+      "status": "crashed",
+      "logs": [
+        "2024-03-28 17:25:00 [INFO] Memory usage: 3.6GB / 4.0GB (90%)",
+        "2024-03-28 17:26:00 [WARN] Eviction rate elevated: 120 keys/sec (allkeys-lru policy)",
+        "2024-03-28 17:27:00 [WARN] Memory usage: 3.9GB / 4.0GB (97%) — nearing maxmemory limit",
+        "2024-03-28 17:27:30 [ERROR] OOM: cannot allocate 2.1MB for new key 'session:user:98234'",
+        "2024-03-28 17:27:31 [ERROR] OOM: write command rejected — maxmemory reached",
+        "2024-03-28 17:27:45 [ERROR] Background save (RDB) failed: Cannot allocate memory for fork()",
+        "2024-03-28 17:28:00 [ERROR] Repeated OOM errors — 847 write rejections in last 30s",
+        "2024-03-28 17:28:15 [ERROR] FATAL: Redis process killed by OOM killer (signal 9)",
+        "2024-03-28 17:28:15 [INFO] Shutdown: saving final RDB snapshot... FAILED (out of memory)"
+      ],
+      "metrics": {
+        "cpu_percent": 0.0,
+        "memory_percent": 99.8,
+        "latency_p99_ms": 0,
+        "error_rate_percent": 100.0,
+        "active_connections": 0
+      },
+      "deploy": {
+        "current_version": "v7.2.0",
+        "previous_version": "v7.1.0",
+        "deployed_at": "2024-03-10T06:00:00Z",
+        "deployed_by": "infra-team"
+      },
+      "dependencies": {
+        "upstream": ["user-service", "order-service", "api-gateway"],
+        "downstream": []
+      }
+    },
+    "db-primary": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 17:28:20 [WARN] Sudden connection spike: 55 → 94 connections in 5 seconds",
+        "2024-03-28 17:28:25 [WARN] Slow query surge: 34 queries >1s detected in last 10s",
+        "2024-03-28 17:28:30 [WARN] CPU at 95% — unusually high for current time of day",
+        "2024-03-28 17:28:35 [WARN] Connection pool: 97/100 connections in use",
+        "2024-03-28 17:29:00 [ERROR] New connections refused: too many clients (max_connections=100)",
+        "2024-03-28 17:29:10 [WARN] Query queue building: 18 queries waiting for connection",
+        "2024-03-28 17:29:20 [INFO] Most frequent queries: SELECT * FROM users WHERE id=?, SELECT * FROM sessions WHERE token=?",
+        "2024-03-28 17:29:30 [WARN] These queries are typically served from cache — cache miss rate may be elevated"
+      ],
+      "metrics": {
+        "cpu_percent": 95.0,
+        "memory_percent": 74.0,
+        "latency_p99_ms": 3200,
+        "error_rate_percent": 8.0,
+        "active_connections": 97
+      },
+      "deploy": {
+        "current_version": "v5.1.0",
+        "previous_version": "v5.0.9",
+        "deployed_at": "2024-03-14T08:00:00Z",
+        "deployed_by": "dba-team"
+      },
+      "dependencies": {
+        "upstream": ["user-service", "order-service", "api-gateway"],
+        "downstream": []
+      }
+    },
+    "user-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 17:28:20 [WARN] Cache lookup failed for user profile: connection refused (cache-redis)",
+        "2024-03-28 17:28:21 [INFO] Falling back to database for user profile queries",
+        "2024-03-28 17:28:30 [WARN] Database response time 2.8s for GET /api/users/profile (normally <50ms with cache)",
+        "2024-03-28 17:28:45 [WARN] Session validation falling back to DB — 3.1s per lookup",
+        "2024-03-28 17:29:00 [ERROR] 35% of requests timing out at 5s limit",
+        "2024-03-28 17:29:10 [WARN] Health check degraded: response time 4.2s (threshold: 2s)"
+      ],
+      "metrics": {
+        "cpu_percent": 48.0,
+        "memory_percent": 55.0,
+        "latency_p99_ms": 4200,
+        "error_rate_percent": 35.0,
+        "active_connections": 180
+      },
+      "deploy": {
+        "current_version": "v3.1.0",
+        "previous_version": "v3.0.9",
+        "deployed_at": "2024-03-25T14:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["cache-redis", "db-primary"]
+      }
+    },
+    "order-service": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 17:28:25 [WARN] Cache miss for order #89123 inventory check — querying DB directly",
+        "2024-03-28 17:28:40 [WARN] Order processing latency 3.5s (SLO: 500ms)",
+        "2024-03-28 17:29:00 [ERROR] Order #89145 timed out waiting for DB connection",
+        "2024-03-28 17:29:10 [WARN] 28% of orders failing due to database timeouts",
+        "2024-03-28 17:29:20 [ERROR] Bulk order batch #4590 processing halted: cannot acquire DB connection"
+      ],
+      "metrics": {
+        "cpu_percent": 42.0,
+        "memory_percent": 52.0,
+        "latency_p99_ms": 3500,
+        "error_rate_percent": 28.0,
+        "active_connections": 160
+      },
+      "deploy": {
+        "current_version": "v2.3.1",
+        "previous_version": "v2.3.0",
+        "deployed_at": "2024-03-28T10:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": ["api-gateway"],
+        "downstream": ["cache-redis", "db-primary"]
+      }
+    },
+    "api-gateway": {
+      "status": "degraded",
+      "logs": [
+        "2024-03-28 17:28:30 [WARN] Upstream user-service response time exceeding SLO (p99 > 2000ms)",
+        "2024-03-28 17:28:45 [WARN] Upstream order-service response time exceeding SLO",
+        "2024-03-28 17:29:00 [WARN] 30% of API requests returning 504 Gateway Timeout",
+        "2024-03-28 17:29:15 [WARN] SLO breach: p99 latency 3800ms (target: 500ms) for 3 consecutive minutes",
+        "2024-03-28 17:29:30 [INFO] Rate limiting activated to protect backend services"
+      ],
+      "metrics": {
+        "cpu_percent": 52.0,
+        "memory_percent": 48.0,
+        "latency_p99_ms": 3800,
+        "error_rate_percent": 30.0,
+        "active_connections": 1100
+      },
+      "deploy": {
+        "current_version": "v1.8.0",
+        "previous_version": "v1.7.9",
+        "deployed_at": "2024-03-21T09:00:00Z",
+        "deployed_by": "ci-pipeline"
+      },
+      "dependencies": {
+        "upstream": [],
+        "downstream": ["user-service", "order-service", "cache-redis", "db-primary"]
+      }
+    }
+  },
+  "root_cause": {
+    "service": "cache-redis",
+    "category": "oom",
+    "description": "cache-redis exhausted its 4GB maxmemory limit and was killed by the OOM killer, forcing all services to fall back to direct database queries and overwhelming db-primary",
+    "keywords": ["cache", "redis", "oom", "memory", "cache-redis", "maxmemory", "eviction"]
+  },
+  "correct_remediation": [
+    {"action": "restart_service", "args": {"service_name": "cache-redis"}}
+  ],
+  "max_steps": 12,
+  "investigation_targets": ["cache-redis", "db-primary"],
+  "investigation_metrics": [["cache-redis", "memory_percent"], ["db-primary", "cpu_percent"]]
+}

@@ -21,3 +21,13 @@ tasks:
     description: "A faulty auth-service deployment triggers cascading failures across the stack. Rollback the deploy, restart affected services, and stabilize the system."
     max_steps: 20
     difficulty: hard
+  - id: cache_failure
+    title: "Cache Layer Collapse"
+    description: "cache-redis OOM crash forces all services to hit db-primary directly, overwhelming it. Identify the root cause and restore the cache layer."
+    max_steps: 12
+    difficulty: medium
+  - id: memory_leak
+    title: "Memory Leak from Bad Deploy"
+    description: "Deploy v3.1.0 to user-service introduced a memory leak that eventually killed the process, cascading failures to order-service, payment-service, and beyond. Roll back and restore."
+    max_steps: 18
+    difficulty: hard

@@ -420,11 +420,27 @@ class ScenarioEngine:
                 "error_rate_percent": 0.0,
                 "active_connections": 48,
             },
+            "cache-redis": {
+                "cpu_percent": 12.0,
+                "memory_percent": 45.0,
+                "latency_p99_ms": 2,
+                "error_rate_percent": 0.0,
+                "active_connections": 200,
+            },
+            "user-service:memory_leak": {
+                "cpu_percent": 31.0,
+                "memory_percent": 47.0,
+                "latency_p99_ms": 72,
+                "error_rate_percent": 0.6,
+                "active_connections": 140,
+            },
         }
 
         profile_key = service_name
         if episode_state.get("id") == "hard" and service_name == "order-service":
             profile_key = "order-service:hard"
+        elif episode_state.get("id") == "memory_leak" and service_name == "user-service":
+            profile_key = "user-service:memory_leak"
 
         profile = profiles.get(profile_key, {})
         self._mark_service_healthy(service, **profile)
@@ -455,23 +471,49 @@ class ScenarioEngine:
                 )
 
     def _maybe_finalize_cascade_recovery(self, episode_state: dict) -> None:
-        """Auto-heal dependent services once the hard scenario is fully remediated."""
-        if episode_state.get("id") != "hard":
-            return
+        """Auto-heal dependent services once a scenario is fully remediated."""
+        scenario_id = episode_state.get("id")
 
-        services = episode_state["services"]
-        required = ("auth-service", "user-service", "order-service", "payment-service")
-        if not all(services.get(name, {}).get("status") == "healthy" for name in required):
-            return
+        if scenario_id == "hard":
+            services = episode_state["services"]
+            required = ("auth-service", "user-service", "order-service", "payment-service")
+            if not all(services.get(name, {}).get("status") == "healthy" for name in required):
+                return
+            for service_name in ("api-gateway", "notification-service"):
+                service = services.get(service_name)
+                if service and service.get("status") != "healthy":
+                    self._apply_recovery_profile(episode_state, service_name)
+                    self._append_log(
+                        service,
+                        "Dependent authentication path recovered and backlog drain is in progress.",
+                    )
 
-        for service_name in ("api-gateway", "notification-service"):
-            service = services.get(service_name)
-            if service and service.get("status") != "healthy":
-                self._apply_recovery_profile(episode_state, service_name)
-                self._append_log(
-                    service,
-                    "Dependent authentication path recovered and backlog drain is in progress.",
-                )
+        elif scenario_id == "cache_failure":
+            services = episode_state["services"]
+            if services.get("cache-redis", {}).get("status") != "healthy":
+                return
+            for service_name in ("db-primary", "user-service", "order-service", "api-gateway"):
+                service = services.get(service_name)
+                if service and service.get("status") != "healthy":
+                    self._apply_recovery_profile(episode_state, service_name)
+                    self._append_log(
+                        service,
+                        "Cache layer restored. Database load returning to normal.",
+                    )
+
+        elif scenario_id == "memory_leak":
+            services = episode_state["services"]
+            required = ("user-service", "order-service", "payment-service")
+            if not all(services.get(name, {}).get("status") == "healthy" for name in required):
+                return
+            for service_name in ("api-gateway", "notification-service"):
+                service = services.get(service_name)
+                if service and service.get("status") != "healthy":
+                    self._apply_recovery_profile(episode_state, service_name)
+                    self._append_log(
+                        service,
+                        "Upstream user-service recovered after rollback. Request handling restored.",
+                    )
 
 
 def _metric_unit(metric: str) -> str:

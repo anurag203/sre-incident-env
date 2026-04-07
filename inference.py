@@ -144,6 +144,46 @@ POLICY_PLANS = {
             },
         ),
     ],
+    "cache_failure": [
+        ("check_alert_details", {}),
+        ("list_services", {}),
+        ("check_logs", {"service_name": "db-primary"}),
+        ("check_logs", {"service_name": "cache-redis"}),
+        ("check_metrics", {"service_name": "cache-redis", "metric": "memory"}),
+        ("restart_service", {"service_name": "cache-redis"}),
+        (
+            "resolve_incident",
+            {
+                "root_cause": "cache-redis",
+                "summary": (
+                    "cache-redis exhausted its 4GB maxmemory limit and was killed by the OOM killer, "
+                    "forcing all services to fall back to direct database queries and overwhelming "
+                    "db-primary; restarting cache-redis restored the cache layer and relieved database load."
+                ),
+            },
+        ),
+    ],
+    "memory_leak": [
+        ("check_alert_details", {}),
+        ("check_logs", {"service_name": "api-gateway"}),
+        ("check_logs", {"service_name": "user-service"}),
+        ("check_metrics", {"service_name": "user-service", "metric": "memory"}),
+        ("check_dependencies", {"service_name": "user-service"}),
+        ("rollback_deploy", {"service_name": "user-service"}),
+        ("restart_service", {"service_name": "order-service"}),
+        ("restart_service", {"service_name": "payment-service"}),
+        (
+            "resolve_incident",
+            {
+                "root_cause": "user-service",
+                "summary": (
+                    "Deploy v3.1.0 to user-service introduced an unbounded HashMap in "
+                    "UserSessionCache.refreshAll() that grew until OOM killed the process; "
+                    "rolling back to v3.0.9 and restarting dependent services restored the stack."
+                ),
+            },
+        ),
+    ],
 }
 
 
@@ -672,6 +712,8 @@ def main():
         ("easy", "Service OOM Crash"),
         ("medium", "Database Slow Query Cascade"),
         ("hard", "Bad Deploy Cascading Failure"),
+        ("cache_failure", "Cache Layer Collapse"),
+        ("memory_leak", "Memory Leak from Bad Deploy"),
     ]
 
     print("\nWaiting for environment server...", flush=True)
