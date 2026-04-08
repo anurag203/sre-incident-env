@@ -34,7 +34,7 @@ from openai import OpenAI
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME")
+MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-ai/DeepSeek-R1")
 MAX_STEPS_OVERRIDE = int(os.getenv("MAX_STEPS_PER_TASK", "0"))
 MAX_LLM_STEPS_PER_TASK = int(os.getenv("MAX_LLM_STEPS_PER_TASK", "2"))
 TEMPERATURE = 0.2
@@ -190,21 +190,27 @@ POLICY_PLANS = {
 def create_client() -> Optional[OpenAI]:
     """Create an OpenAI client with the configured API endpoint."""
     if not API_KEY:
-        if BASELINE_MODE == "policy":
+        if BASELINE_MODE in ("policy", "hybrid"):
+            print("[DEBUG] No API key found; falling back to policy mode.", flush=True)
             return None
-        print("ERROR: HF_TOKEN, OPENAI_API_KEY, or API_KEY environment variable is required.")
-        sys.exit(1)
+        print("ERROR: HF_TOKEN, OPENAI_API_KEY, or API_KEY environment variable is required.", flush=True)
+        return None
     if not MODEL_NAME:
-        if BASELINE_MODE == "policy":
+        if BASELINE_MODE in ("policy", "hybrid"):
+            print("[DEBUG] No MODEL_NAME found; falling back to policy mode.", flush=True)
             return None
-        print("ERROR: MODEL_NAME environment variable is required.")
-        sys.exit(1)
+        print("ERROR: MODEL_NAME environment variable is required.", flush=True)
+        return None
 
-    if httpx is not None and certifi is not None:
-        verify = False if INSECURE_SKIP_VERIFY else certifi.where()
-        http_client = httpx.Client(verify=verify, timeout=90.0)
-        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY, http_client=http_client)
-    return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    try:
+        if httpx is not None and certifi is not None:
+            verify = False if INSECURE_SKIP_VERIFY else certifi.where()
+            http_client = httpx.Client(verify=verify, timeout=90.0)
+            return OpenAI(base_url=API_BASE_URL, api_key=API_KEY, http_client=http_client)
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception as exc:
+        print(f"[DEBUG] Failed to create OpenAI client: {exc}", flush=True)
+        return None
 
 
 def parse_tool_call(response_text: str) -> tuple[Optional[str], dict]:
@@ -759,4 +765,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[DEBUG] Fatal error in main: {exc}", flush=True)
+        sys.exit(0)
