@@ -22,14 +22,6 @@ import sys
 import textwrap
 from typing import Optional
 
-try:
-    import certifi
-except ImportError:
-    certifi = None
-try:
-    import httpx
-except ImportError:
-    httpx = None
 from openai import OpenAI
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
@@ -40,7 +32,6 @@ MAX_STEPS_OVERRIDE = int(os.getenv("MAX_STEPS_PER_TASK", "0"))
 MAX_LLM_STEPS_PER_TASK = int(os.getenv("MAX_LLM_STEPS_PER_TASK", "2"))
 TEMPERATURE = 0.2
 MAX_TOKENS = 300
-INSECURE_SKIP_VERIFY = os.getenv("OPENENV_INSECURE_SKIP_VERIFY", "0") == "1"
 BASELINE_MODE = os.getenv("BASELINE_MODE", "hybrid").lower()
 
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
@@ -189,25 +180,19 @@ POLICY_PLANS = {
 
 
 def create_client() -> Optional[OpenAI]:
-    """Create an OpenAI client with the configured API endpoint."""
-    if not API_KEY:
-        if BASELINE_MODE in ("policy", "hybrid"):
-            print("[DEBUG] No API key found; falling back to policy mode.", flush=True)
-            return None
-        print("ERROR: HF_TOKEN, OPENAI_API_KEY, or API_KEY environment variable is required.", flush=True)
-        return None
-    if not MODEL_NAME:
-        if BASELINE_MODE in ("policy", "hybrid"):
-            print("[DEBUG] No MODEL_NAME found; falling back to policy mode.", flush=True)
-            return None
-        print("ERROR: MODEL_NAME environment variable is required.", flush=True)
-        return None
+    """Create an OpenAI client with the configured API endpoint.
 
+    Follows the sample pattern: create the client directly with the
+    configured variables.  Returns None only when running in pure policy
+    mode or when credentials are entirely absent so the policy fallback
+    can take over.
+    """
+    if BASELINE_MODE == "policy":
+        return None
+    if not API_KEY:
+        print("[DEBUG] No API key found; policy fallback will be used.", flush=True)
+        return None
     try:
-        if httpx is not None and certifi is not None:
-            verify = False if INSECURE_SKIP_VERIFY else certifi.where()
-            http_client = httpx.Client(verify=verify, timeout=90.0)
-            return OpenAI(base_url=API_BASE_URL, api_key=API_KEY, http_client=http_client)
         return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     except Exception as exc:
         print(f"[DEBUG] Failed to create OpenAI client: {exc}", flush=True)
